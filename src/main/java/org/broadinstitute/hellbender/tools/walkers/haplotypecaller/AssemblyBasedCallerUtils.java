@@ -13,6 +13,7 @@ import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.engine.AlignmentContext;
 import org.broadinstitute.hellbender.engine.AssemblyRegion;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.walkers.ReferenceConfidenceVariantContextMerger;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.readthreading.ReadThreadingAssembler;
 import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
@@ -29,10 +30,7 @@ import org.broadinstitute.hellbender.utils.haplotype.HaplotypeBAMWriter;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.locusiterator.LocusIteratorByState;
 import org.broadinstitute.hellbender.utils.pileup.ReadPileup;
-import org.broadinstitute.hellbender.utils.read.AlignmentUtils;
-import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.read.ReadCoordinateComparator;
-import org.broadinstitute.hellbender.utils.read.ReadUtils;
+import org.broadinstitute.hellbender.utils.read.*;
 import org.broadinstitute.hellbender.utils.smithwaterman.SmithWatermanAligner;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
@@ -275,7 +273,7 @@ public final class AssemblyBasedCallerUtils {
 
         final byte[] fullReferenceWithPadding = region.getAssemblyRegionReference(referenceReader, REFERENCE_PADDING_FOR_ASSEMBLY);
         final SimpleInterval paddedReferenceLoc = getPaddedReferenceLoc(region, REFERENCE_PADDING_FOR_ASSEMBLY, referenceReader);
-        final Haplotype referenceHaplotype = createReferenceHaplotype(region, paddedReferenceLoc, referenceReader);
+        final Haplotype refHaplotype = createReferenceHaplotype(region, paddedReferenceLoc, referenceReader);
 
         final ReadErrorCorrector readErrorCorrector = argumentCollection.assemblerArgs.errorCorrectReads ?
                 new ReadErrorCorrector(argumentCollection.assemblerArgs.kmerLengthForReadErrorCorrection,
@@ -286,9 +284,12 @@ public final class AssemblyBasedCallerUtils {
                 null;
 
         try {
-            final AssemblyResultSet assemblyResultSet = assemblyEngine.runLocalAssembly(region, referenceHaplotype, fullReferenceWithPadding,
-                                                                                        paddedReferenceLoc, givenAlleles, readErrorCorrector, header,
-                                                                                        aligner);
+            final AssemblyResultSet assemblyResultSet = assemblyEngine.runLocalAssembly(region, refHaplotype, fullReferenceWithPadding,
+                    paddedReferenceLoc, readErrorCorrector, header, aligner);
+            if (!givenAlleles.isEmpty()) {
+                addGivenHaplotypes(region.getExtendedSpan().getStart(), givenAlleles, argumentCollection.maxMnpDistance, aligner, refHaplotype, assemblyResultSet);
+            }
+
             assemblyResultSet.setDebug(argumentCollection.assemblerArgs.debugAssembly);
             assemblyResultSet.debugDump(logger);
             return assemblyResultSet;
@@ -303,6 +304,43 @@ public final class AssemblyBasedCallerUtils {
             }
             throw e;
         }
+    }
+
+    @VisibleForTesting
+    static void addGivenHaplotypes(final int assemblyRegionStart, final List<VariantContext> givenAlleles, final int maxMnpDistance,
+                                           final SmithWatermanAligner aligner, final Haplotype refHaplotype, final AssemblyResultSet assemblyResultSet) {
+        final int activeRegionStart = refHaplotype.getAlignmentStartHapwrtRef();
+        final Map<Integer, VariantContext> assembledVariants = assemblyResultSet.getVariationEvents(maxMnpDistance).stream()
+                .collect(Collectors.groupingBy(VariantContext::getStart, Collectors.collectingAndThen(Collectors.toList(), AssemblyBasedCallerUtils::makeMergedVariantContext)));
+
+        for (final VariantContext givenVC : givenAlleles) {
+            final VariantContext assembledVC = assembledVariants.get(givenVC.getStart());
+            final int givenVCRefLength = givenVC.getReference().length();
+            final Allele longerRef = (assembledVC == null || givenVCRefLength > assembledVC.getReference().length()) ? givenVC.getReference() : assembledVC.getReference();
+            final List<Allele> unassembledGivenAlleles;
+            if (assembledVC == null) {
+                unassembledGivenAlleles = givenVC.getAlternateAlleles();
+            } else {
+                // map all alleles to the longest common reference
+                final Set<Allele> assembledAlleleSet = new HashSet<>(longerRef.length() == assembledVC.getReference().length() ? assembledVC.getAlternateAlleles() :
+                        ReferenceConfidenceVariantContextMerger.remapAlleles(assembledVC, longerRef));
+                final Set<Allele> givenAlleleSet = new HashSet<>(longerRef.length() == givenVCRefLength ? givenVC.getAlternateAlleles() :
+                        ReferenceConfidenceVariantContextMerger.remapAlleles(givenVC, longerRef));
+                unassembledGivenAlleles = givenAlleleSet.stream().filter(a -> !assembledAlleleSet.contains(a)).collect(Collectors.toList());
+            }
+
+            unassembledGivenAlleles.forEach(givenAllele -> {
+                final Haplotype insertedRefHaplotype = refHaplotype.insertAllele(longerRef, givenAllele, activeRegionStart + givenVC.getStart() - assemblyRegionStart, givenVC.getStart());
+                if( insertedRefHaplotype != null ) { // can be null if the requested allele can't be inserted into the haplotype
+                    final Cigar cigar = CigarUtils.calculateCigar(refHaplotype.getBases(), insertedRefHaplotype.getBases(), aligner);
+                    insertedRefHaplotype.setCigar(cigar);
+                    insertedRefHaplotype.setGenomeLocation(refHaplotype.getGenomeLocation());
+                    insertedRefHaplotype.setAlignmentStartHapwrtRef(activeRegionStart);
+                    assemblyResultSet.add(insertedRefHaplotype);
+                }
+            });
+        }
+        assemblyResultSet.regenerateVariationEvents(maxMnpDistance);
     }
 
     /**
@@ -817,4 +855,5 @@ public final class AssemblyBasedCallerUtils {
         }
         return new VariantContextBuilder(vc).genotypes(phasedGenotypes).make();
     }
+
 }

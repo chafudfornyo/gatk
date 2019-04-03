@@ -92,6 +92,7 @@ public final class AssemblyResultSet {
         result.setRegionForGenotyping(trimmedAssemblyRegion);
         result.setFullReferenceWithPadding(fullReferenceWithPadding);
         result.setPaddedReferenceLoc(paddedReferenceLoc);
+        result.variationPresent = getVariationEvents(0).stream().anyMatch(vc -> vc.overlaps(trimmedAssemblyRegion));
         if (result.refHaplotype == null) {
             throw new IllegalStateException("missing reference haplotype in the trimmed set");
         }
@@ -511,12 +512,19 @@ public final class AssemblyResultSet {
     public SortedSet<VariantContext> getVariationEvents(final int maxMnpDistance) {
         ParamUtils.isPositiveOrZero(maxMnpDistance, "maxMnpDistance may not be negative.");
         if (variationEvents == null) {
-            final List<Haplotype> haplotypeList = getHaplotypeList();
-            EventMap.buildEventMapsForHaplotypes(haplotypeList, fullReferenceWithPadding, paddedReferenceLoc, debug, maxMnpDistance);
-            variationEvents = EventMap.getAllVariantContexts(haplotypeList);
+            regenerateVariationEvents(maxMnpDistance);
         }
         return variationEvents;
     }
+
+    public void regenerateVariationEvents(int maxMnpDistance) {
+        final List<Haplotype> haplotypeList = getHaplotypeList();
+        EventMap.buildEventMapsForHaplotypes(haplotypeList, fullReferenceWithPadding, paddedReferenceLoc, debug, maxMnpDistance);
+        variationEvents = EventMap.getAllVariantContexts(haplotypeList);
+        variationPresent = haplotypeList.stream().anyMatch(Haplotype::isNonReference);
+    }
+
+
 
     public void setDebug(boolean debug) {
         this.debug = debug;

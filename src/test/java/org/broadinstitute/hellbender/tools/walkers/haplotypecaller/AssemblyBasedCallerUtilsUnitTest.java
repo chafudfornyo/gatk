@@ -21,6 +21,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.utils.smithwaterman.SmithWatermanAligner;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
@@ -966,5 +967,31 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
             Assert.assertEquals(actual.size(), 1);
             Assert.assertEquals(actual.iterator().next(), expected);
         }
+    }
+
+    @Test
+    public void testAddGivenHaplotypes() {
+        final int assemblyRegionStart = 1;
+        final int maxMnpDistance = 0;
+        final SmithWatermanAligner aligner = SmithWatermanAligner.getAligner(SmithWatermanAligner.Implementation.FASTEST_AVAILABLE);
+        final AssemblyResultSet assemblyResultSet = new AssemblyResultSet();
+
+        final Haplotype refHaplotype = new Haplotype("AAAACCCCGGGGTTTT".getBytes(), true);
+        final byte[] fullReferenceWithPadding = ("A" + refHaplotype.getBaseString()).getBytes();
+        refHaplotype.setAlignmentStartHapwrtRef(assemblyRegionStart);
+        refHaplotype.setCigar(new Cigar(Collections.singletonList(new CigarElement(refHaplotype.length(), CigarOperator.M))));
+        refHaplotype.setGenomeLocation(new SimpleInterval("chr", assemblyRegionStart, assemblyRegionStart + refHaplotype.length()));
+        assemblyResultSet.setPaddedReferenceLoc(new SimpleInterval("chr", 1, assemblyRegionStart + refHaplotype.length()));
+        assemblyResultSet.add(refHaplotype);
+        assemblyResultSet.setFullReferenceWithPadding(fullReferenceWithPadding);
+
+        final VariantContext givenVC = new VariantContextBuilder("test", "chr", 2, 2,
+                Arrays.asList(Allele.create((byte) 'A', true), Allele.create((byte) 'C', false))).make();
+
+        AssemblyBasedCallerUtils.addGivenHaplotypes(assemblyRegionStart, Collections.singletonList(givenVC), maxMnpDistance,
+                aligner, refHaplotype, assemblyResultSet);
+
+        Assert.assertEquals(assemblyResultSet.getHaplotypeCount(), 2);
+
     }
 }

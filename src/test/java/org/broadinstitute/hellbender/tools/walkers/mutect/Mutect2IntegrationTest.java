@@ -393,7 +393,7 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
                     "-L", "20:10019000-10022000",
                     "-O", outputVcf.getAbsolutePath(),
                     "-" + M2ArgumentCollection.EMISSION_LOG_SHORT_NAME, "15",
-                    "-" + M2ArgumentCollection.MAX_MNP_DISTANCE_SHORT_NAME, Integer.toString(maxMnpDistance));
+                    "-" + AssemblyBasedCallerArgumentCollection.MAX_MNP_DISTANCE_SHORT_NAME, Integer.toString(maxMnpDistance));
             runCommandLine(args);
 
             checkMnpOutput(maxMnpDistance, outputVcf);
