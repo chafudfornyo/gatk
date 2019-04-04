@@ -152,4 +152,18 @@ public class CalculateContaminationIntegrationTest extends CommandLineProgramTes
         final double calculatedContamination = ContaminationRecord.readFromFile(contaminationTable).get(0).getContamination();
         Assert.assertEquals(calculatedContamination, contamination, 0.01);
     }
+
+    @Test
+    public void testPanel() {
+        final File pileupSummary = new File("/Users/davidben/Desktop/gene-panel/pileup-summaries.table");
+        final File contaminationTable = createTempFile("contamination", ".table");
+
+        final String[] args = {
+                "-I", pileupSummary.getAbsolutePath(),
+                "-O", contaminationTable.getAbsolutePath(),
+        };
+        runCommandLine(args);
+
+        final double calculatedContamination = ContaminationRecord.readFromFile(contaminationTable).get(0).getContamination();
+    }
 }
